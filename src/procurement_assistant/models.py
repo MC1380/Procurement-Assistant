@@ -1,0 +1,72 @@
+
+from decimal import Decimal
+from enum import Enum
+
+from pydantic import BaseModel, Field
+
+
+class SupplierStatus(str, Enum):
+    APPROVED = "approved"
+    BLOCKED = "blocked"
+
+
+class OrderStatus(str, Enum):
+    CREATED = "created"
+    CONFIRMED = "confirmed"
+    CANCELLED = "cancelled"
+
+
+class InventoryItem(BaseModel):
+    sku: str
+    name: str
+    available_quantity: int = Field(ge=0)
+
+
+class Supplier(BaseModel):
+    supplier_id: str
+    name: str
+    status: SupplierStatus
+    unit_price: Decimal = Field(gt=0)
+
+
+class PurchaseOrder(BaseModel):
+    order_id: str
+    request_id: str
+    supplier_id: str
+    sku: str
+    quantity: int = Field(gt=0)
+    unit_price: Decimal = Field(gt=0)
+    status: OrderStatus = OrderStatus.CREATED
+
+    @property
+    def total_price(self) -> Decimal:
+        return self.unit_price * self.quantity
+
+class BudgetPreference(str, Enum):
+    LOWEST_COST = "lowest_cost"
+    BALANCED = "balanced"
+    QUALITY_FIRST = "quality_first"
+    UNKNOWN = "unknown"
+
+
+class PurchaseRequest(BaseModel):
+    request_id: str
+    sku: str
+    quantity: int = Field(gt=0)
+    budget_limit: Decimal | None = Field(default=None, gt=0)
+    budget_preference: BudgetPreference = BudgetPreference.UNKNOWN
+
+
+
+class PurchaseEvaluationStatus(str, Enum):
+    NO_PURCHASE_NEEDED = "no_purchase_needed"
+    READY_FOR_PURCHASE = "ready_for_purchase"
+    REJECTED_SUPPLIER = "rejected_supplier"
+    OVER_BUDGET = "over_budget"
+
+
+class PurchaseEvaluation(BaseModel):
+    status: PurchaseEvaluationStatus
+    purchase_quantity: int = Field(ge=0)
+    estimated_cost: Decimal = Field(ge=0)
+    message: str
