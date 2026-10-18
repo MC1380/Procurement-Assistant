@@ -11,7 +11,9 @@ from procurement_assistant.models import (
     Supplier,
     SupplierStatus,
     PurchaseRequest,
-    BudgetPreference
+    BudgetPreference,
+    PurchasePolicy,
+    DepartmentBudget,
 )
 
 
@@ -104,3 +106,71 @@ def test_purchase_request_accepts_budget_limit():
 
     assert request.budget_limit == Decimal("500")
     assert request.budget_preference == BudgetPreference.BALANCED
+
+def test_purchase_policy_accepts_valid_data():
+    policy = PurchasePolicy(
+        max_auto_approval_amount=Decimal("50000000"),
+        sensitive_categories={"critical_components"},
+    )
+
+    assert policy.max_auto_approval_amount == Decimal("50000000")
+    assert policy.require_approved_supplier is True
+    assert "critical_components" in policy.sensitive_categories
+
+
+def test_purchase_policy_rejects_zero_limit():
+    with pytest.raises(ValidationError):
+        PurchasePolicy(
+            max_auto_approval_amount=Decimal("0"),
+        )
+
+
+def test_purchase_policy_has_independent_default_categories():
+    policy_a = PurchasePolicy(
+        max_auto_approval_amount=Decimal("50000000"),
+    )
+    policy_b = PurchasePolicy(
+        max_auto_approval_amount=Decimal("30000000"),
+    )
+
+    policy_a.sensitive_categories.add("critical_components")
+
+    assert policy_b.sensitive_categories == set()
+
+def test_department_budget_calculates_remaining_budget():
+    budget = DepartmentBudget(
+        department_id="maintenance",
+        allocated_budget=Decimal("200000000"),
+        spent_amount=Decimal("70000000"),
+    )
+
+    assert budget.remaining_budget == Decimal("130000000")
+
+
+def test_department_budget_defaults_spent_amount_to_zero():
+    budget = DepartmentBudget(
+        department_id="maintenance",
+        allocated_budget=Decimal("200000000"),
+    )
+
+    assert budget.spent_amount == Decimal("0")
+    assert budget.remaining_budget == Decimal("200000000")
+
+
+def test_department_budget_allows_over_budget_status():
+    budget = DepartmentBudget(
+        department_id="maintenance",
+        allocated_budget=Decimal("100000000"),
+        spent_amount=Decimal("110000000"),
+    )
+
+    assert budget.remaining_budget == Decimal("-10000000")
+
+
+def test_department_budget_rejects_negative_spent_amount():
+    with pytest.raises(ValidationError):
+        DepartmentBudget(
+            department_id="maintenance",
+            allocated_budget=Decimal("100000000"),
+            spent_amount=Decimal("-1"),
+        )    

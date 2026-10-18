@@ -9,6 +9,8 @@ from procurement_assistant.models import (
     InventoryItem,
     PurchaseEvaluation,
     PurchaseEvaluationStatus,
+    DepartmentBudget,
+    PurchasePolicy,
 )
 
 
@@ -20,14 +22,6 @@ def validate_purchase_request(
 
     if supplier.status != SupplierStatus.APPROVED:
         return False, "Supplier is not approved."
-
-    total_price = supplier.unit_price * request.quantity
-
-    if (
-        request.budget_limit is not None
-        and total_price > request.budget_limit
-    ):
-        return False, "Purchase exceeds the user's budget limit."
 
     return True, "Purchase request passed basic validation."
 
@@ -49,8 +43,10 @@ def evaluate_purchase_request(
     request: PurchaseRequest,
     inventory: InventoryItem,
     supplier: Supplier,
+    department_budget: DepartmentBudget,
+    policy: PurchasePolicy,
 ) -> PurchaseEvaluation:
-    """Evaluate a purchase request using inventory, supplier and budget rules."""
+    """Evaluate a purchase using inventory, budget and policy rules."""
 
     if request.sku != inventory.sku:
         raise ValueError("Request SKU does not match inventory SKU.")
@@ -60,7 +56,6 @@ def evaluate_purchase_request(
         request.quantity - inventory.available_quantity,
     )
 
-    # No purchase is necessary if inventory covers the request.
     if shortage == 0:
         return PurchaseEvaluation(
             status=PurchaseEvaluationStatus.NO_PURCHASE_NEEDED,
@@ -69,7 +64,6 @@ def evaluate_purchase_request(
             message="Sufficient inventory is available.",
         )
 
-    # Only check supplier approval when a purchase is actually needed.
     if supplier.status != SupplierStatus.APPROVED:
         return PurchaseEvaluation(
             status=PurchaseEvaluationStatus.REJECTED_SUPPLIER,
@@ -80,15 +74,22 @@ def evaluate_purchase_request(
 
     estimated_cost = supplier.unit_price * shortage
 
-    if (
-        request.budget_limit is not None
-        and estimated_cost > request.budget_limit
-    ):
+    # Check the company's actual remaining department budget.
+    if estimated_cost > department_budget.remaining_budget:
         return PurchaseEvaluation(
             status=PurchaseEvaluationStatus.OVER_BUDGET,
             purchase_quantity=0,
             estimated_cost=estimated_cost,
-            message="Purchase exceeds the user's budget limit.",
+            message="Department budget is insufficient. Manager review is required.",
+        )
+
+    # The agent cannot automatically approve purchases above its authority.
+    if estimated_cost > policy.max_auto_approval_amount:
+        return PurchaseEvaluation(
+            status=PurchaseEvaluationStatus.MANAGER_APPROVAL_REQUIRED,
+            purchase_quantity=0,
+            estimated_cost=estimated_cost,
+            message="Purchase exceeds the agent's auto-approval limit.",
         )
 
     return PurchaseEvaluation(

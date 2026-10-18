@@ -48,6 +48,10 @@ class BudgetPreference(str, Enum):
     QUALITY_FIRST = "quality_first"
     UNKNOWN = "unknown"
 
+class PurchasePolicy(BaseModel):
+    max_auto_approval_amount: Decimal = Field(gt=0)
+    require_approved_supplier: bool = True
+    sensitive_categories: set[str] = Field(default_factory=set)
 
 class PurchaseRequest(BaseModel):
     request_id: str
@@ -63,6 +67,7 @@ class PurchaseEvaluationStatus(str, Enum):
     READY_FOR_PURCHASE = "ready_for_purchase"
     REJECTED_SUPPLIER = "rejected_supplier"
     OVER_BUDGET = "over_budget"
+    MANAGER_APPROVAL_REQUIRED = "manager_approval_required"
 
 
 class PurchaseEvaluation(BaseModel):
@@ -70,3 +75,12 @@ class PurchaseEvaluation(BaseModel):
     purchase_quantity: int = Field(ge=0)
     estimated_cost: Decimal = Field(ge=0)
     message: str
+
+class DepartmentBudget(BaseModel):
+    department_id: str
+    allocated_budget: Decimal = Field(gt=0)
+    spent_amount: Decimal = Field(default=Decimal("0"), ge=0)
+
+    @property
+    def remaining_budget(self) -> Decimal:
+        return self.allocated_budget - self.spent_amount
