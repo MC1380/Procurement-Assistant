@@ -1,5 +1,12 @@
 from decimal import Decimal
 
+from sqlalchemy import create_engine
+from sqlalchemy.orm import sessionmaker
+
+import procurement_assistant.workflow as workflow_module
+from procurement_assistant.database.connection import Base
+from procurement_assistant.database.models import InventoryItemDB
+
 from procurement_assistant.models import (
     DepartmentBudget,
     InventoryItem,
@@ -11,6 +18,42 @@ from procurement_assistant.models import (
 )
 from procurement_assistant.state import ProcurementState
 from procurement_assistant.workflow import workflow
+
+#
+
+def run_workflow_with_test_database(state):
+    engine = create_engine("sqlite:///:memory:")
+    Base.metadata.create_all(bind=engine)
+
+    TestSessionLocal = sessionmaker(
+        bind=engine,
+        autoflush=False,
+        expire_on_commit=False,
+    )
+
+    inventory = state["inventory"]
+
+    if inventory is not None:
+        with TestSessionLocal() as session:
+            session.add(
+                InventoryItemDB(
+                    sku=inventory.sku,
+                    name=inventory.name,
+                    available_quantity=inventory.available_quantity,
+                    minimum_quantity=0,
+                )
+            )
+            session.commit()
+
+    original_session_local = workflow_module.SessionLocal
+    workflow_module.SessionLocal = TestSessionLocal
+
+    try:
+        return workflow_module.workflow.invoke(state)
+    finally:
+        workflow_module.SessionLocal = original_session_local
+        engine.dispose()
+
 
 # Tests for the workflow
 
@@ -57,7 +100,7 @@ def test_purchase_requiring_manager_approval():
         max_auto_approval_amount=Decimal("100"),
     )
 
-    result = workflow.invoke(state)
+    result = run_workflow_with_test_database(state)
 
     assert (
         result["evaluation"].status
@@ -75,7 +118,7 @@ def test_purchase_ready_for_purchase():
         max_auto_approval_amount=Decimal("1000"),
     )
 
-    result = workflow.invoke(state)
+    result = run_workflow_with_test_database(state)
 
     assert (
         result["evaluation"].status
@@ -92,7 +135,7 @@ def test_no_purchase_needed_when_inventory_is_sufficient():
         available_quantity=10,
     )
 
-    result = workflow.invoke(state)
+    result = run_workflow_with_test_database(state)
 
     assert (
         result["evaluation"].status
@@ -102,3 +145,18 @@ def test_no_purchase_needed_when_inventory_is_sufficient():
     assert result["evaluation"].estimated_cost == Decimal("0")
     assert result["manager_review_status"] == "not_required"
     assert result["manager_email_status"] == "not_required"
+
+
+def test_workflow_stops_when_inventory_is_missing():
+    state = make_initial_state()
+    state["request"] = state["request"].model_copy(
+        update={"sku": "UNKNOWN-999"}
+    )
+
+    result = run_workflow_with_test_database(state)
+
+    assert result["inventory"] is None
+    assert result["inventory_error"] == (
+        "Inventory item not found: UNKNOWN-999"
+    )
+    assert result["evaluation"] is None

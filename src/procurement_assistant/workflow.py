@@ -1,6 +1,9 @@
 
 from decimal import Decimal
 
+from procurement_assistant.database.connection import SessionLocal
+from procurement_assistant.services.inventory_service import get_inventory_item
+
 from langgraph.graph import StateGraph, START, END
 
 from procurement_assistant.business_rules import evaluate_purchase_request, calculate_purchase_quantity
@@ -17,8 +20,34 @@ from procurement_assistant.state import ProcurementState
 
 # Nodes
 
+def load_inventory(state: ProcurementState) -> dict:
+    """Load the inventory item from the database."""
+    sku = state["request"].sku
+
+    with SessionLocal() as session:
+        inventory = get_inventory_item(sku, session)
+
+    if inventory is None:
+        return {
+            "inventory": None,
+            "inventory_error": f"Inventory item not found: {sku}",
+        }
+
+    return {
+        "inventory": inventory,
+        "inventory_error": None,
+    }
+
+
 def evaluate_purchase(state: ProcurementState) -> dict:
     """ Evaluate the purchase request. """
+    inventory = state["inventory"]
+
+    if inventory is None:
+        raise ValueError(
+            "Cannot evaluate purchase without inventory data."
+        )
+
     evaluation = evaluate_purchase_request(
         request=state["request"],
         inventory=state["inventory"],
@@ -28,21 +57,6 @@ def evaluate_purchase(state: ProcurementState) -> dict:
     )
 
     return {"evaluation": evaluation}
-
-def route_request(state: ProcurementState) -> str:
-    """ Route the request based on the evaluation status. """
-    evaluation = state["evaluation"]
-
-    if evaluation is None:
-        raise ValueError("Purchase must be evaluated before routing.")
-
-    if (
-        evaluation.status
-        == PurchaseEvaluationStatus.MANAGER_APPROVAL_REQUIRED
-    ):
-        return "manager_approval"
-
-    return "continue"
 
 
 def mark_manager_review_pending(
@@ -94,15 +108,50 @@ def prepare_manager_email(state: ProcurementState) -> dict:
 
     return {"manager_email_subject": subject, "manager_email_body": body, "manager_email_status": "draft_ready"}
 
+#Routes
+
+def route_request(state: ProcurementState) -> str:
+    """ Route the request based on the evaluation status. """
+    evaluation = state["evaluation"]
+
+    if evaluation is None:
+        raise ValueError("Purchase must be evaluated before routing.")
+
+    if (
+        evaluation.status
+        == PurchaseEvaluationStatus.MANAGER_APPROVAL_REQUIRED
+    ):
+        return "manager_approval"
+
+    return "continue"
+
+
+def route_inventory(state: ProcurementState) -> str:
+    """ Route the request based on the inventory status. """
+    if state["inventory"] is None:
+        return "missing"
+
+    return "found"
+
 # Workflow Builder Definition and Compilation 
 
 builder = StateGraph(ProcurementState)
 
+builder.add_node("load_inventory", load_inventory)
 builder.add_node("evaluate_purchase", evaluate_purchase)
-builder.add_node("mark_manager_review_pending", mark_manager_review_pending)
-builder.add_node("prepare_manager_email",prepare_manager_email)
+builder.add_node("mark_manager_review_pending",mark_manager_review_pending)
+builder.add_node("prepare_manager_email", prepare_manager_email)
 
-builder.add_edge(START, "evaluate_purchase")
+builder.add_edge(START, "load_inventory")
+
+builder.add_conditional_edges(
+    "load_inventory",
+    route_inventory,
+    {
+        "found": "evaluate_purchase",
+        "missing": END,
+    },
+)
 
 builder.add_conditional_edges(
     "evaluate_purchase",
@@ -113,7 +162,10 @@ builder.add_conditional_edges(
     },
 )
 
-builder.add_edge("mark_manager_review_pending", "prepare_manager_email")
+builder.add_edge(
+    "mark_manager_review_pending",
+    "prepare_manager_email",
+)
 builder.add_edge("prepare_manager_email", END)
 
 workflow = builder.compile()

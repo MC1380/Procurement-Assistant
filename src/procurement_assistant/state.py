@@ -12,7 +12,8 @@ from procurement_assistant.models import (
 
 class ProcurementState(TypedDict):
     request: PurchaseRequest
-    inventory: InventoryItem
+    inventory: InventoryItem | None
+    inventory_error: str | None
     supplier: Supplier
     department_budget: DepartmentBudget
     policy: PurchasePolicy
