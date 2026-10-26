@@ -1,6 +1,5 @@
-
 from procurement_assistant.database.connection import Base, engine
-from procurement_assistant.database.models import InventoryItemDB
+from procurement_assistant.database.models import InventoryItemDB, PurchaseSuggestionDB
 
 
 def main() -> None:

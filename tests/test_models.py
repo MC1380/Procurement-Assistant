@@ -14,6 +14,8 @@ from procurement_assistant.models import (
     BudgetPreference,
     PurchasePolicy,
     DepartmentBudget,
+    PurchaseSuggestion,
+    SuggestionStatus,
 )
 
 
@@ -174,3 +176,27 @@ def test_department_budget_rejects_negative_spent_amount():
             allocated_budget=Decimal("100000000"),
             spent_amount=Decimal("-1"),
         )    
+
+def test_purchase_suggestion_defaults_to_pending():
+    suggestion = PurchaseSuggestion(
+        suggestion_id="SUG-001",
+        item_name="Pressure Sensor",
+        requested_quantity=2,
+        reason="Required for maintenance",
+        requested_by="employee-001",
+    )
+
+    assert suggestion.status == SuggestionStatus.PENDING
+    assert suggestion.manager_comment is None
+
+def test_purchase_suggestion_rejects_zero_quantity():
+
+
+    with pytest.raises(ValidationError):
+        PurchaseSuggestion(
+            suggestion_id="SUG-002",
+            item_name="Pressure Sensor",
+            requested_quantity=0,
+            reason="Required for maintenance",
+            requested_by="employee-001",
+        )

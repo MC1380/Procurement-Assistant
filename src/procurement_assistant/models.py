@@ -84,3 +84,24 @@ class DepartmentBudget(BaseModel):
     @property
     def remaining_budget(self) -> Decimal:
         return self.allocated_budget - self.spent_amount
+
+
+class SuggestionStatus(str, Enum):
+    """Possible review states for a purchase suggestion."""
+
+    PENDING = "pending"
+    APPROVED = "approved"
+    REJECTED = "rejected"
+
+
+class PurchaseSuggestion(BaseModel):
+    """A request to consider purchasing an item not found in the catalog."""
+
+    suggestion_id: str
+    item_name: str = Field(min_length=1)
+    description: str | None = None
+    requested_quantity: int = Field(gt=0)
+    reason: str = Field(min_length=1)
+    requested_by: str
+    status: SuggestionStatus = SuggestionStatus.PENDING
+    manager_comment: str | None = None
