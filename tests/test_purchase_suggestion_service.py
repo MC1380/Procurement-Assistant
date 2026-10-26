@@ -11,6 +11,7 @@ from procurement_assistant.models import (
 from procurement_assistant.services.purchase_suggestion_service import (
     create_purchase_suggestion,
     get_purchase_suggestion,
+    review_purchase_suggestion
 )
 
 
@@ -68,6 +69,74 @@ def test_get_unknown_purchase_suggestion_returns_none():
             result = get_purchase_suggestion("SUG-UNKNOWN", session)
             assert result is None
 
+    finally:
+        Base.metadata.drop_all(engine)
+        engine.dispose()
+
+
+def test_review_purchase_suggestion_approves():
+    engine = create_engine(
+        "sqlite://",
+        connect_args={"check_same_thread": False},
+        poolclass=StaticPool,
+    )
+
+    try:
+        Base.metadata.create_all(engine)
+
+        with Session(engine) as session:
+            suggestion = PurchaseSuggestion(
+                suggestion_id="SUG-TEST-001",
+                item_name="Pressure Sensor",
+                description="Industrial temperature monitoring",
+                requested_quantity=2,
+                reason="Required for maintenance",
+                requested_by="employee-001",
+            )
+            saved = create_purchase_suggestion(suggestion, session)
+            assert saved.status == SuggestionStatus.PENDING
+
+            reviewed = review_purchase_suggestion(
+                "SUG-TEST-001",
+                SuggestionStatus.APPROVED,
+                "Approved for purchase",
+                session,
+            )
+            assert reviewed.status == SuggestionStatus.APPROVED
+            assert reviewed.manager_comment == "Approved for purchase"
+        
+    finally:
+        Base.metadata.drop_all(engine)
+        engine.dispose()
+
+def test_review_purchase_suggestion_rejected():
+    engine = create_engine(
+        "sqlite://",
+        connect_args={"check_same_thread": False},
+        poolclass=StaticPool,
+    )
+    try:
+        Base.metadata.create_all(engine)
+
+        with Session(engine) as session:
+            suggestion = PurchaseSuggestion(
+                suggestion_id="SUG-TEST-001",
+                item_name="Pressure Sensor",
+                description="Industrial temperature monitoring",
+                requested_quantity=2,
+                reason="Required for maintenance",
+                requested_by="employee-001",
+            )
+            saved = create_purchase_suggestion(suggestion, session)
+            assert saved.status == SuggestionStatus.PENDING
+            reviewed = review_purchase_suggestion(
+                "SUG-TEST-001",
+                SuggestionStatus.REJECTED,
+                "Rejected for purchase",
+                session,
+            )
+            assert reviewed.status == SuggestionStatus.REJECTED
+            assert reviewed.manager_comment == "Rejected for purchase"
     finally:
         Base.metadata.drop_all(engine)
         engine.dispose()
