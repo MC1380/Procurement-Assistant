@@ -6,7 +6,9 @@ from procurement_assistant.models import (
     PurchaseEvaluation,
     PurchasePolicy,
     PurchaseRequest,
-    Supplier
+    Supplier,
+    SuggestionStatus,
+    PurchaseSuggestion,
 )
 
 
@@ -22,3 +24,6 @@ class ProcurementState(TypedDict):
     manager_email_subject: str | None
     manager_email_body: str | None
     manager_email_status: str
+    purchase_suggestion: PurchaseSuggestion | None
+    suggestion_error: str | None
+    suggestion_status: SuggestionStatus | None

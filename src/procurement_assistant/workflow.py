@@ -1,8 +1,11 @@
 
 from decimal import Decimal
+from uuid import uuid4
+
 
 from procurement_assistant.database.connection import SessionLocal
 from procurement_assistant.services.inventory_service import get_inventory_item
+from procurement_assistant.services.purchase_suggestion_service import create_purchase_suggestion
 
 from langgraph.graph import StateGraph, START, END
 
@@ -15,6 +18,8 @@ from procurement_assistant.models import (
     PurchaseRequest,
     Supplier,
     SupplierStatus,
+    PurchaseSuggestion,
+    SuggestionStatus
 )
 from procurement_assistant.state import ProcurementState
 
@@ -36,6 +41,66 @@ def load_inventory(state: ProcurementState) -> dict:
     return {
         "inventory": inventory,
         "inventory_error": None,
+    }
+
+def create_purchase_suggestion_node(
+    state: ProcurementState,
+) -> dict:
+    """Register a purchase suggestion when an item is missing."""
+
+    request = state["request"]
+
+    # Validate the information required to register a suggestion.
+    missing_fields = []
+
+    if not request.item_name:
+        missing_fields.append("item_name")
+
+    if not request.reason:
+        missing_fields.append("reason")
+
+    if not request.requested_by:
+        missing_fields.append("requested_by")
+
+    if missing_fields:
+        return {
+            "purchase_suggestion": None,
+            "suggestion_status": None,
+            "suggestion_error": (
+                "Missing required suggestion details: "
+                + ", ".join(missing_fields)
+            ),
+        }
+
+    suggestion = PurchaseSuggestion(
+        suggestion_id=f"SUG-{uuid4().hex}",
+        item_name=request.item_name,
+        description=request.description,
+        requested_quantity=request.quantity,
+        reason=request.reason,
+        requested_by=request.requested_by,
+        status=SuggestionStatus.PENDING,
+    )
+
+    try:
+        with SessionLocal() as session:
+            saved_suggestion = create_purchase_suggestion(
+                suggestion=suggestion,
+                session=session,
+            )
+    except Exception as exc:
+        return {
+            "purchase_suggestion": None,
+            "suggestion_status": None,
+            "suggestion_error": (
+                f"Failed to save purchase suggestion: {exc}"
+            ),
+        }
+
+    return {
+        "purchase_suggestion": saved_suggestion,
+        "suggestion_status": saved_suggestion.status,
+        "suggestion_error": None,
     }
 
 
@@ -141,6 +206,7 @@ builder.add_node("load_inventory", load_inventory)
 builder.add_node("evaluate_purchase", evaluate_purchase)
 builder.add_node("mark_manager_review_pending",mark_manager_review_pending)
 builder.add_node("prepare_manager_email", prepare_manager_email)
+builder.add_node("create_purchase_suggestion",create_purchase_suggestion_node)
 
 builder.add_edge(START, "load_inventory")
 
@@ -149,7 +215,7 @@ builder.add_conditional_edges(
     route_inventory,
     {
         "found": "evaluate_purchase",
-        "missing": END,
+        "missing": "create_purchase_suggestion",
     },
 )
 
@@ -167,5 +233,6 @@ builder.add_edge(
     "prepare_manager_email",
 )
 builder.add_edge("prepare_manager_email", END)
+builder.add_edge("create_purchase_suggestion", END)
 
 workflow = builder.compile()

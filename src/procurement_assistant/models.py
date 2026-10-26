@@ -59,6 +59,10 @@ class PurchaseRequest(BaseModel):
     quantity: int = Field(gt=0)
     budget_limit: Decimal | None = Field(default=None, gt=0)
     budget_preference: BudgetPreference = BudgetPreference.UNKNOWN
+    item_name: str | None = Field(default=None, min_length=1)
+    description: str | None = None
+    reason: str | None = Field(default=None, min_length=1)
+    requested_by: str | None = Field(default=None, min_length=1)
 
 
 

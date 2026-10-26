@@ -1,11 +1,11 @@
 from decimal import Decimal
 
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, func, select
 from sqlalchemy.orm import sessionmaker
 
 import procurement_assistant.workflow as workflow_module
 from procurement_assistant.database.connection import Base
-from procurement_assistant.database.models import InventoryItemDB
+from procurement_assistant.database.models import InventoryItemDB,PurchaseSuggestionDB
 
 from procurement_assistant.models import (
     DepartmentBudget,
@@ -15,6 +15,7 @@ from procurement_assistant.models import (
     PurchaseRequest,
     Supplier,
     SupplierStatus,
+    SuggestionStatus,
 )
 from procurement_assistant.state import ProcurementState
 from procurement_assistant.workflow import workflow
@@ -49,7 +50,15 @@ def run_workflow_with_test_database(state):
     workflow_module.SessionLocal = TestSessionLocal
 
     try:
-        return workflow_module.workflow.invoke(state)
+        result = workflow_module.workflow.invoke(state)
+
+        with TestSessionLocal() as session:
+            suggestion_count = session.scalar(
+                select(func.count()).select_from(PurchaseSuggestionDB)
+            )
+
+        result["_test_suggestion_count"] = suggestion_count
+        return result
     finally:
         workflow_module.SessionLocal = original_session_local
         engine.dispose()
@@ -92,6 +101,9 @@ def make_initial_state(
         "manager_email_subject": None,
         "manager_email_body": None,
         "manager_email_status": "not_required",
+        "purchase_suggestion": None,
+        "suggestion_error": None,
+        "suggestion_status": SuggestionStatus.PENDING,
     }
 
 def test_purchase_requiring_manager_approval():
@@ -150,7 +162,13 @@ def test_no_purchase_needed_when_inventory_is_sufficient():
 def test_workflow_stops_when_inventory_is_missing():
     state = make_initial_state()
     state["request"] = state["request"].model_copy(
-        update={"sku": "UNKNOWN-999"}
+    update={
+        "sku": "UNKNOWN-999",
+        "item_name": "Pressure Sensor",
+        "description": "Industrial pressure sensor",
+        "reason": "Required for machine maintenance",
+        "requested_by": "employee-001",
+    }
     )
 
     result = run_workflow_with_test_database(state)
@@ -160,3 +178,31 @@ def test_workflow_stops_when_inventory_is_missing():
         "Inventory item not found: UNKNOWN-999"
     )
     assert result["evaluation"] is None
+
+    assert result["purchase_suggestion"] is not None
+    assert result["purchase_suggestion"].item_name == "Pressure Sensor"
+    assert result["purchase_suggestion"].status == SuggestionStatus.PENDING
+    assert result["suggestion_status"] == SuggestionStatus.PENDING
+    assert result["suggestion_error"] is None
+
+def test_missing_suggestion_details_prevent_registration():
+    state = make_initial_state()
+
+    state["request"] = state["request"].model_copy(
+        update={
+            "sku": "UNKNOWN-999",
+            "item_name": None,
+            "reason": None,
+            "requested_by": None,
+        }
+    )
+
+    result = run_workflow_with_test_database(state)
+
+    assert result["inventory"] is None
+    assert result["purchase_suggestion"] is None
+    assert result["suggestion_status"] is None
+    assert "item_name" in result["suggestion_error"]
+    assert "reason" in result["suggestion_error"]
+    assert "requested_by" in result["suggestion_error"]
+    assert result["_test_suggestion_count"] == 0
