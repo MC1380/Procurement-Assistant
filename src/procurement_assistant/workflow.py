@@ -4,12 +4,17 @@ from uuid import uuid4
 
 
 from procurement_assistant.database.connection import SessionLocal
+
 from procurement_assistant.services.inventory_service import get_inventory_item
 from procurement_assistant.services.purchase_suggestion_service import create_purchase_suggestion
+from procurement_assistant.services.email_service import MockEmailSender
 
 from langgraph.graph import StateGraph, START, END
+from langgraph.types import interrupt
+from langgraph.checkpoint.memory import InMemorySaver
 
 from procurement_assistant.business_rules import evaluate_purchase_request, calculate_purchase_quantity
+
 from procurement_assistant.models import (
     DepartmentBudget,
     InventoryItem,
@@ -21,6 +26,7 @@ from procurement_assistant.models import (
     PurchaseSuggestion,
     SuggestionStatus
 )
+
 from procurement_assistant.state import ProcurementState
 
 # Nodes
@@ -173,6 +179,65 @@ def prepare_manager_email(state: ProcurementState) -> dict:
 
     return {"manager_email_subject": subject, "manager_email_body": body, "manager_email_status": "draft_ready"}
 
+
+
+def send_manager_email(state: ProcurementState) -> dict:
+    """Simulate sending the prepared approval email."""
+
+    subject = state["manager_email_subject"]
+    body = state["manager_email_body"]
+
+    if not subject or not body:
+        raise ValueError("Email subject and body must be prepared first.")
+
+    sender = MockEmailSender()
+
+    result = sender.send(
+        recipient="manager@example.com",
+        subject=subject,
+        body=body,
+    )
+
+    return {
+        "manager_email_status": (
+            "simulated_sent" if result.success else "failed"
+        ),
+    }
+
+
+def wait_for_manager_approval(state: ProcurementState) -> dict:
+    """Pause the workflow until a manager reviews the request."""
+
+    evaluation = state["evaluation"]
+    if evaluation is None:
+        raise ValueError("Purchase must be evaluated before manager review.")
+
+    decision = interrupt(
+        {
+            "request_id": state["request"].request_id,
+            "estimated_cost": str(evaluation.estimated_cost),
+            "email_subject": state["manager_email_subject"],
+            "email_body": state["manager_email_body"],
+            "message": "Manager approval is required.",
+        }
+    )
+
+    if not isinstance(decision, dict):
+        raise ValueError("Manager decision must be a dictionary.")
+
+    status = decision.get("decision")
+    if status not in {"approved", "rejected"}:
+        raise ValueError("Decision must be 'approved' or 'rejected'.")
+
+    comment = decision.get("comment")
+    if not isinstance(comment, str) or not comment.strip():
+        raise ValueError("A manager comment is required.")
+
+    return {
+        "manager_review_status": status,
+        "manager_review_comment": comment.strip(),
+    }
+
 #Routes
 
 def route_request(state: ProcurementState) -> str:
@@ -207,6 +272,8 @@ builder.add_node("evaluate_purchase", evaluate_purchase)
 builder.add_node("mark_manager_review_pending",mark_manager_review_pending)
 builder.add_node("prepare_manager_email", prepare_manager_email)
 builder.add_node("create_purchase_suggestion",create_purchase_suggestion_node)
+builder.add_node("wait_for_manager_approval",wait_for_manager_approval)
+builder.add_node("send_manager_email", send_manager_email)
 
 builder.add_edge(START, "load_inventory")
 
@@ -232,7 +299,10 @@ builder.add_edge(
     "mark_manager_review_pending",
     "prepare_manager_email",
 )
-builder.add_edge("prepare_manager_email", END)
+builder.add_edge("prepare_manager_email", "send_manager_email")
+builder.add_edge("send_manager_email", "wait_for_manager_approval")
+builder.add_edge("wait_for_manager_approval", END)
 builder.add_edge("create_purchase_suggestion", END)
 
-workflow = builder.compile()
+checkpointer = InMemorySaver()
+workflow = builder.compile(checkpointer=checkpointer)

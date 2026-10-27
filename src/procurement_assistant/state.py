@@ -21,9 +21,10 @@ class ProcurementState(TypedDict):
     policy: PurchasePolicy
     evaluation: PurchaseEvaluation | None
     manager_review_status: str
+    manager_review_comment: str | None
     manager_email_subject: str | None
     manager_email_body: str | None
-    manager_email_status: str
+    manager_email_status: str | None
     purchase_suggestion: PurchaseSuggestion | None
     suggestion_error: str | None
     suggestion_status: SuggestionStatus | None

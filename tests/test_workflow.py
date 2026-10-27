@@ -1,4 +1,8 @@
+import pytest
 from decimal import Decimal
+from uuid import uuid4
+
+from langgraph.types import Command
 
 from sqlalchemy import create_engine, func, select
 from sqlalchemy.orm import sessionmaker
@@ -50,7 +54,10 @@ def run_workflow_with_test_database(state):
     workflow_module.SessionLocal = TestSessionLocal
 
     try:
-        result = workflow_module.workflow.invoke(state)
+        result = workflow_module.workflow.invoke( 
+            state,
+            config={"configurable": {"thread_id": str(uuid4())}},
+        )
 
         with TestSessionLocal() as session:
             suggestion_count = session.scalar(
@@ -67,13 +74,17 @@ def run_workflow_with_test_database(state):
 # Tests for the workflow
 
 def make_initial_state(
-    max_auto_approval_amount: Decimal = Decimal("1000"),
+    max_auto_approval_amount: Decimal = Decimal("100"),
     available_quantity: int = 4,
+    request_id: str | None = None,
 ) -> ProcurementState:
     """Make an initial state for the workflow."""
+    if request_id is None:
+        request_id = f"REQ-TEST-{uuid4().hex}"
+
     return {
         "request": PurchaseRequest(
-            request_id="REQ-TEST-001",
+            request_id=request_id,
             sku="MOTOR-001",
             quantity=10,
         ),
@@ -110,6 +121,7 @@ def test_purchase_requiring_manager_approval():
     """Test that the workflow requires manager approval when the purchase amount is greater than the max auto approval amount."""
     state = make_initial_state(
         max_auto_approval_amount=Decimal("100"),
+        request_id="REQ-TEST-001",
     )
 
     result = run_workflow_with_test_database(state)
@@ -119,7 +131,7 @@ def test_purchase_requiring_manager_approval():
         == PurchaseEvaluationStatus.MANAGER_APPROVAL_REQUIRED
     )
     assert result["manager_review_status"] == "pending"
-    assert result["manager_email_status"] == "draft_ready"
+    assert result["manager_email_status"] == "simulated_sent"
     assert result["manager_email_subject"] == (
         "Manager Approval Required — REQ-TEST-001"
     )
@@ -128,6 +140,7 @@ def test_purchase_ready_for_purchase():
     """Test that the workflow is ready for purchase when the purchase amount is less than the max auto approval amount."""
     state = make_initial_state(
         max_auto_approval_amount=Decimal("1000"),
+        request_id="REQ-TEST-002",
     )
 
     result = run_workflow_with_test_database(state)
@@ -145,6 +158,7 @@ def test_purchase_ready_for_purchase():
 def test_no_purchase_needed_when_inventory_is_sufficient():
     state = make_initial_state(
         available_quantity=10,
+        request_id="REQ-TEST-003",
     )
 
     result = run_workflow_with_test_database(state)
@@ -160,7 +174,9 @@ def test_no_purchase_needed_when_inventory_is_sufficient():
 
 
 def test_workflow_stops_when_inventory_is_missing():
-    state = make_initial_state()
+    state = make_initial_state(
+        request_id="REQ-TEST-004",
+    )
     state["request"] = state["request"].model_copy(
     update={
         "sku": "UNKNOWN-999",
@@ -186,7 +202,9 @@ def test_workflow_stops_when_inventory_is_missing():
     assert result["suggestion_error"] is None
 
 def test_missing_suggestion_details_prevent_registration():
-    state = make_initial_state()
+    state = make_initial_state(
+        request_id="REQ-TEST-005",
+    )
 
     state["request"] = state["request"].model_copy(
         update={
@@ -206,3 +224,130 @@ def test_missing_suggestion_details_prevent_registration():
     assert "reason" in result["suggestion_error"]
     assert "requested_by" in result["suggestion_error"]
     assert result["_test_suggestion_count"] == 0
+
+
+def test_workflow_pauses_and_resumes_after_manager_approval():
+    state = make_initial_state(
+        request_id="REQ-TEST-006",
+    )
+    config = {
+        "configurable": {
+            "thread_id": state["request"].request_id,
+        }
+    }
+
+    # First invocation: the workflow should pause for approval.
+    paused_state = workflow.invoke(state, config=config)
+
+    assert paused_state["manager_email_status"] == "simulated_sent"
+    assert paused_state["manager_review_status"] == "pending"
+    assert "__interrupt__" in paused_state
+
+    # Resume the same workflow with the manager's decision.
+    resumed_state = workflow.invoke(
+        Command(
+            resume={
+                "decision": "approved",
+                "comment": "Approved for testing.",
+            }
+        ),
+        config=config,
+    )
+
+    assert resumed_state["manager_review_status"] == "approved"
+    assert resumed_state["manager_review_comment"] == "Approved for testing."
+
+
+def test_workflow_pauses_and_resumes_after_manager_rejection():
+    state = make_initial_state(
+        request_id="REQ-TEST-007",
+    )
+    config = {
+        "configurable": {
+            "thread_id": state["request"].request_id,
+        }
+    }
+
+    # First invocation: the workflow should pause for manager review.
+    paused_state = workflow.invoke(state, config=config)
+    assert paused_state["manager_email_status"] == "simulated_sent"
+    assert paused_state["manager_review_status"] == "pending"
+    assert "__interrupt__" in paused_state
+
+    # Resume the same workflow with the manager's decision.
+    resumed_state = workflow.invoke(
+        Command(
+            resume={
+                "decision": "rejected",
+                "comment": "The requested purchase is not justified.",
+            }
+        ),
+        config=config,
+    )
+
+    assert resumed_state["manager_review_status"] == "rejected"
+    assert resumed_state["manager_review_comment"] == "The requested purchase is not justified."
+
+def test_workflow_pauses_after_manager_approval_with_invalid_decision():
+    state = make_initial_state(
+        request_id="REQ-TEST-008",
+    )
+    config = {
+        "configurable": {
+            "thread_id": state["request"].request_id,
+        }
+    }
+
+    # First invocation: the workflow should pause for approval.
+    paused_state = workflow.invoke(state, config=config)
+    assert paused_state["manager_email_status"] == "simulated_sent"
+    assert paused_state["manager_review_status"] == "pending"
+    assert "__interrupt__" in paused_state
+
+    # Resume the same workflow with the manager's decision.
+    
+    with pytest.raises(ValueError, match="Decision must be 'approved' or 'rejected'."):
+        workflow.invoke(
+        Command(
+            resume={
+                "decision": "invalid",
+                "comment": "Invalid decision.",
+            }
+        ),
+        config=config,
+    )
+    
+
+
+def test_workflow_pauses_after_manager_leaving_comment_blank():
+    state = make_initial_state(
+        request_id="REQ-TEST-009",
+    )
+    config = {
+        "configurable": {
+            "thread_id": state["request"].request_id,
+        }
+    }
+
+    # First invocation: the workflow should pause for approval.
+    paused_state = workflow.invoke(state, config=config)
+    assert paused_state["manager_email_status"] == "simulated_sent"
+    assert paused_state["manager_review_status"] == "pending"
+    assert "__interrupt__" in paused_state
+
+    # Resume the same workflow with the manager's decision.
+    with pytest.raises(ValueError, match="A manager comment is required."):
+        workflow.invoke(
+        Command(
+            resume={
+                "decision": "approved",
+                "comment": "",
+            }
+        ),
+        config=config,
+    )
+    
+def test_different_request_ids_are_independent():
+    state1 = make_initial_state()
+    state2 = make_initial_state()
+    assert state1["request"].request_id != state2["request"].request_id
