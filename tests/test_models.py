@@ -81,7 +81,7 @@ def test_purchase_request_rejects_negative_quantity():
             request_id="REQ-002",
             sku="BRG-6205",
             quantity=-2,
-            budget=Decimal("500"),
+            budget_limit=Decimal("500"),
         )
 
 

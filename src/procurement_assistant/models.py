@@ -109,3 +109,13 @@ class PurchaseSuggestion(BaseModel):
     requested_by: str
     status: SuggestionStatus = SuggestionStatus.PENDING
     manager_comment: str | None = None
+
+
+class ProductAttribute(BaseModel):
+    """Structured product attribute returned by the knowledge service."""
+
+    category_key: str
+    attribute_key: str
+    display_name: str
+    description: str | None = None
+    is_required: bool
